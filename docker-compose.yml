@@ -1,0 +1,37 @@
+services:
+  backend:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Keep the application-facing name stable while tolerating older local
+      # .env files that used MICROSOFT_TENANT_ID.
+      MICROSOFT_APP_TENANT_ID: ${MICROSOFT_APP_TENANT_ID:-${MICROSOFT_TENANT_ID}}
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongodb:27017}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-enterprise_risk_bot}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "3978:3978"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3978/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  mongodb:
+    image: mongo:8.0
+    ports:
+      - "27018:27017"
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mongodb_data:

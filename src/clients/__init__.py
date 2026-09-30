@@ -1,0 +1,1 @@
+"""Microsoft provider SDK boundaries."""
