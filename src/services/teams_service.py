@@ -57,7 +57,23 @@ class TeamsService:
         if not context.tenant_id or not context.team_id:
             return []
         team_name = await self._resolve_team_name(context)
+        logger.info(
+            "teams_channel_discovery_started",
+            extra={
+                "tenant_id": context.tenant_id,
+                "team_id": context.team_id,
+            },
+        )
         channels = await self.client.get_team_channels(turn_context, context.team_id)
+        channels = channels or []
+        logger.info(
+            "teams_channel_discovery_completed",
+            extra={
+                "tenant_id": context.tenant_id,
+                "team_id": context.team_id,
+                "channel_count": len(channels),
+            },
+        )
         discovered: list[DiscoveredChannel] = []
         for channel in channels:
             channel_id = _value(channel, "id")
@@ -67,6 +83,7 @@ class TeamsService:
             logger.info(
                 "teams_channel_discovered",
                 extra={
+                    "tenant_id": context.tenant_id,
                     "team_id": context.team_id,
                     "channel_id": channel_id,
                     "channel_name": channel_name,
@@ -80,10 +97,62 @@ class TeamsService:
                 channel_name=channel_name,
                 conversation_id=context.conversation_id,
                 service_url=context.service_url,
+                available=True,
             )
             await self.channel_repository.upsert(model)
             discovered.append(model)
         return discovered
+
+    async def register_channel_from_activity(
+        self, turn_context: Any
+    ) -> DiscoveredChannel | None:
+        """Register one channel from a genuine channel-scoped activity."""
+        activity = turn_context.activity
+        activity_data = _as_mapping(activity)
+        activity_type = activity_data.get("type") or getattr(activity, "type", None)
+        context = TeamsContext.from_activity(activity)
+        channel_data = _as_mapping(
+            activity_data.get("channelData") or activity_data.get("channel_data")
+        )
+        channel_is_scoped = (
+            bool(channel_data.get("channel"))
+            and isinstance(context.conversation_type, str)
+            and context.conversation_type.lower() == "channel"
+        )
+        if (
+            activity_type == "installationUpdate"
+            or not channel_is_scoped
+            or not context.tenant_id
+            or not context.team_id
+            or not context.channel_id
+        ):
+            return None
+
+        team_name = await self._resolve_team_name(context)
+        channel_name = _resolve_channel_name(
+            {"name": context.channel_name}, context.channel_id, context.team_id
+        )
+        channel = DiscoveredChannel(
+            tenant_id=context.tenant_id,
+            team_id=context.team_id,
+            channel_id=context.channel_id,
+            team_name=team_name,
+            channel_name=channel_name,
+            conversation_id=context.conversation_id,
+            service_url=context.service_url,
+            available=True,
+        )
+        await self.channel_repository.upsert(channel)
+        logger.info(
+            "teams_channel_activity_registered",
+            extra={
+                "tenant_id": channel.tenant_id,
+                "team_id": channel.team_id,
+                "channel_id": channel.channel_id,
+                "channel_name": channel.channel_name,
+            },
+        )
+        return channel
 
     async def handle_conversation_update(self, turn_context: Any) -> DiscoveredChannel | None:
         """Persist a channel created event from an authenticated Teams activity."""

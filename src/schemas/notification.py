@@ -55,3 +55,48 @@ class NotificationSendResponse(BaseModel):
     success: bool
     data: NotificationSendResponseData | None = None
     error: object | None = None
+
+
+class ReactionSummary(BaseModel):
+    """Counts for currently active reactions on a notification."""
+
+    total: int = 0
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class NotificationListItem(BaseModel):
+    """Safe notification metadata returned by the list endpoint."""
+
+    notification_id: str
+    destination_id: str | None = None
+    risk_id: str | None = None
+    tenant_id: str | None = None
+    team_id: str | None = None
+    channel_id: str | None = None
+    notification_type: str | None = None
+    view_type: str | None = None
+    status: str | None = None
+    teams_message_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    reaction_summary: ReactionSummary = Field(default_factory=ReactionSummary)
+
+
+class NotificationDetail(NotificationListItem):
+    """Safe metadata for one notification."""
+
+
+class NotificationListResponse(BaseModel):
+    """Response envelope for notification listing."""
+
+    success: bool
+    data: list[NotificationListItem]
+    error: object | None = None
+
+
+class NotificationDetailResponse(BaseModel):
+    """Response envelope for a notification detail lookup."""
+
+    success: bool
+    data: NotificationDetail | None = None
+    error: object | None = None

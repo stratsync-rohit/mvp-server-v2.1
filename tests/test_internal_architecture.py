@@ -180,7 +180,7 @@ async def test_channel_discovery_persists_all_channels():
 async def test_channel_discovery_resolves_name_variants_and_general_fallback(channel, expected):
     class Client:
         async def get_team_channels(self, turn_context, team_id):
-            return [channel]
+            return [channel, SimpleNamespace(id="other-channel", name="Other")]
 
     class Repository:
         def __init__(self):
@@ -199,7 +199,7 @@ async def test_channel_discovery_resolves_name_variants_and_general_fallback(cha
 
 
 @pytest.mark.asyncio
-async def test_default_channel_discovery_upsert_is_idempotent():
+async def test_default_channel_discovery_persists_general_idempotently():
     class Client:
         async def get_team_channels(self, turn_context, team_id):
             return [{"id": team_id}]
@@ -209,12 +209,13 @@ async def test_default_channel_discovery_upsert_is_idempotent():
     service = TeamsService(Client(), repository)
     context = TeamsContext(tenant_id="tenant", team_id="team")
 
-    await service.discover_channels(SimpleNamespace(), context)
-    await service.discover_channels(SimpleNamespace(), context)
+    first = await service.discover_channels(SimpleNamespace(), context)
+    second = await service.discover_channels(SimpleNamespace(), context)
 
-    document = await repository.get("tenant", "team", "team")
+    assert first[0].channel_id == second[0].channel_id == "team"
+    assert first[0].channel_name == second[0].channel_name == "General"
+    assert await repository.get("tenant", "team", "team") is not None
     assert len(collection.documents) == 1
-    assert document["channel_name"] == "General"
 
 
 @pytest.mark.asyncio
@@ -358,7 +359,7 @@ async def test_channel_created_is_persisted_idempotently_with_channel_identity()
                 "eventType": "channelCreated",
                 "tenant": {"id": "tenant-1"},
                 "team": {"id": "team-1", "name": "Risk"},
-                "channel": {"id": "channel-1", "name": channel_name},
+                "channel": {"id": "test2", "name": channel_name},
             },
         })
 
@@ -366,11 +367,11 @@ async def test_channel_created_is_persisted_idempotently_with_channel_identity()
     repository = DiscoveredChannelRepository(collection=collection)
     service = TeamsService(Client(), repository)
     first = await service.handle_conversation_update(event("test1"))
-    original_discovered_at = collection.documents[("tenant-1", "team-1", "channel-1")]["discovered_at"]
+    original_discovered_at = collection.documents[("tenant-1", "team-1", "test2")]["discovered_at"]
     second = await service.handle_conversation_update(event("renamed"))
 
-    document = await repository.get("tenant-1", "team-1", "channel-1")
-    assert first.channel_id == second.channel_id == "channel-1"
+    document = await repository.get("tenant-1", "team-1", "test2")
+    assert first.channel_id == second.channel_id == "test2"
     assert document["channel_id"] != document["conversation_id"]
     assert document["channel_name"] == "renamed"
     assert document["available"] is True

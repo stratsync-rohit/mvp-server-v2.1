@@ -107,7 +107,7 @@ def _app(service: NotificationService, risk_service=None, renderer=None):
     return app
 
 
-def test_public_routes_include_only_the_six_expected_routes():
+def test_public_routes_include_only_the_nine_expected_routes():
     app = create_app()
     routes = sorted(
         (method, route.path)
@@ -118,6 +118,9 @@ def test_public_routes_include_only_the_six_expected_routes():
 
     assert routes == [
         ("GET", "/api/installations"),
+        ("GET", "/api/notifications"),
+        ("GET", "/api/notifications/{notification_id}"),
+        ("GET", "/api/notifications/{notification_id}/reactions"),
         ("GET", "/health"),
         ("GET", "/ready"),
         ("POST", "/api/destinations/resolve"),

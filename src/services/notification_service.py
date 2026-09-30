@@ -8,7 +8,14 @@ from uuid import uuid4
 from src.clients.teams_conversation_client import TeamsConversationClient
 from src.exceptions import AppError
 from src.repositories.notification_repository import NotificationRepository
+from src.repositories.reaction_repository import ReactionRepository
 from src.schemas.destination import build_destination_id
+from src.schemas.notification import (
+    NotificationDetail,
+    NotificationListItem,
+    ReactionSummary,
+)
+from src.schemas.reaction import NotificationReactionsData, ReactionReadItem
 from src.schemas.teams import TeamsContext
 from src.services.destination_service import DestinationService
 
@@ -17,10 +24,101 @@ class NotificationService:
     """Send cards to exact resolved destinations and persist send state."""
 
     def __init__(self, repository: NotificationRepository, destination_service: DestinationService,
-                 conversation_client: TeamsConversationClient) -> None:
+                 conversation_client: TeamsConversationClient,
+                 reaction_repository: ReactionRepository | None = None) -> None:
         self.repository = repository
         self.destination_service = destination_service
         self.conversation_client = conversation_client
+        self.reaction_repository = reaction_repository
+
+    async def list_notifications(
+        self,
+        *,
+        risk_id: str | None = None,
+        destination_id: str | None = None,
+        status: str | None = None,
+        notification_type: str | None = None,
+        view_type: str | None = None,
+        limit: int = 50,
+    ) -> list[NotificationListItem]:
+        """Load safe notification metadata and batch its active reactions."""
+        if status is not None and status not in {"pending", "sent", "failed"}:
+            raise AppError("NOTIFICATION_STATUS_INVALID", "status is not supported.", 422)
+        documents = await self.repository.list(
+            risk_id=self._filter_value(risk_id, "risk_id"),
+            destination_id=self._filter_value(destination_id, "destination_id"),
+            status=status,
+            notification_type=self._filter_value(notification_type, "notification_type"),
+            view_type=self._filter_value(view_type, "view_type"),
+            limit=limit,
+        )
+        summaries = await self._summaries([document.get("notification_id") for document in documents])
+        return [
+            NotificationListItem.model_validate({
+                **document,
+                "reaction_summary": summaries.get(document.get("notification_id"), ReactionSummary()),
+            })
+            for document in documents
+        ]
+
+    async def get_notification(self, notification_id: str) -> NotificationDetail:
+        """Load one safe notification or raise a public 404."""
+        normalized_id = notification_id.strip() if isinstance(notification_id, str) else ""
+        if not normalized_id:
+            raise AppError("NOTIFICATION_NOT_FOUND", "The notification was not found.", 404)
+        document = await self.repository.get_by_notification_id(normalized_id)
+        if document is None:
+            raise AppError("NOTIFICATION_NOT_FOUND", "The notification was not found.", 404)
+        summaries = await self._summaries([normalized_id])
+        return NotificationDetail.model_validate({
+            **document,
+            "reaction_summary": summaries.get(normalized_id, ReactionSummary()),
+        })
+
+    async def get_reactions(
+        self, notification_id: str, *, include_inactive: bool = False
+    ) -> NotificationReactionsData:
+        """Load reaction states, with an active-only summary."""
+        notification = await self.get_notification(notification_id)
+        records = []
+        if self.reaction_repository is not None:
+            records = await self.reaction_repository.list_by_notification_id(
+                notification.notification_id, include_inactive=include_inactive
+            )
+        if not include_inactive:
+            records = [record for record in records if record.get("is_active") is True]
+        return NotificationReactionsData(
+            notification_id=notification.notification_id,
+            summary=notification.reaction_summary,
+            reactions=[ReactionReadItem.model_validate(record) for record in records],
+        )
+
+    async def _summaries(self, notification_ids: list[str | None]) -> dict[str, ReactionSummary]:
+        ids = [notification_id for notification_id in notification_ids if notification_id]
+        if self.reaction_repository is None or not ids:
+            return {}
+        records = await self.reaction_repository.list_active_for_notification_ids(ids)
+        summaries = {notification_id: ReactionSummary() for notification_id in ids}
+        for record in records:
+            if record.get("is_active") is not True:
+                continue
+            notification_id = record.get("notification_id")
+            reaction = record.get("reaction")
+            if notification_id not in summaries or not reaction:
+                continue
+            summary = summaries[notification_id]
+            summary.counts[reaction] = summary.counts.get(reaction, 0) + 1
+            summary.total += 1
+        return summaries
+
+    @staticmethod
+    def _filter_value(value: str | None, field: str) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise AppError("NOTIFICATION_FILTER_INVALID", f"{field} must not be blank.", 422)
+        return normalized
 
     async def send(self, destination_id: str, card: dict[str, Any], *, risk_id: str | None = None) -> str:
         """Persist pending state, send the card, and finalize send state."""

@@ -76,10 +76,12 @@ class RiskBot(TeamsActivityHandler):
     async def on_message_activity(self, turn_context: TurnContext) -> None:
         """Observe a message while leaving domain behavior in services."""
         logger.info("teams_message_received")
+        await self._register_channel_from_activity(turn_context)
 
     async def on_message_reaction_activity(self, turn_context: TurnContext) -> None:
         """Delegate reaction add/remove state to the reaction service."""
         logger.info("teams_message_reaction_received")
+        await self._register_channel_from_activity(turn_context)
         if self.reaction_service is not None:
             await self.reaction_service.handle(turn_context)
 
@@ -87,6 +89,7 @@ class RiskBot(TeamsActivityHandler):
         self, turn_context: TurnContext, invoke_value: Any
     ) -> AdaptiveCardInvokeResponse:
         """Validate an identifier-only risk-view action and render its latest view."""
+        await self._register_channel_from_activity(turn_context)
         action = getattr(invoke_value, "action", None)
         if not isinstance(action, dict) or action.get("type") != "Action.Execute":
             return self._invoke_error(400, "BAD_RISK_VIEW_ACTION", "Unsupported card action.")
@@ -131,3 +134,11 @@ class RiskBot(TeamsActivityHandler):
             type="application/vnd.microsoft.error",
             value={"code": code, "message": message},
         )
+
+    async def _register_channel_from_activity(self, turn_context: TurnContext) -> None:
+        """Register channel context without coupling the router to persistence."""
+        if self.teams_service is None:
+            return
+        register = getattr(self.teams_service, "register_channel_from_activity", None)
+        if register is not None:
+            await register(turn_context)

@@ -72,16 +72,18 @@ def create_app() -> FastAPI:
         # NotificationService is an internal dependency of domain callers; the
         # inbound bot only needs installation, reaction, and idempotency routes.
         notification_repository = NotificationRepository(mongo=mongo)
+        reaction_repository = ReactionRepository(mongo=mongo)
         notification_service = NotificationService(
             repository=notification_repository,
             destination_service=destination_service,
             conversation_client=conversation_client,
+            reaction_repository=reaction_repository,
         )
         risk_service = RiskService(RiskRepository(mongo=mongo))
         risk_card_renderer = TeamsRiskCardRenderer()
         risk_view_service = RiskViewService(risk_service, risk_card_renderer)
         reaction_service = ReactionService(
-            ReactionRepository(mongo=mongo), notification_repository
+            reaction_repository, notification_repository
         )
         bot = RiskBot(
             installation_service=installation_service,

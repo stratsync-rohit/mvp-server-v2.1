@@ -17,8 +17,4 @@ class TeamsClient:
         """Return all channels visible to the authenticated bot installation."""
         if TeamsInfo is None:
             return []
-        # The SDK obtains the team from the authenticated turn context; team_id is
-        # retained in the service contract for callers and future SDK versions.
-        del team_id
-        return await TeamsInfo.get_team_channels(turn_context)
-
+        return await TeamsInfo.get_team_channels(turn_context, team_id or "")
