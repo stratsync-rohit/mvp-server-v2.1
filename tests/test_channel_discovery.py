@@ -33,6 +33,27 @@ async def test_teams_client_passes_explicit_team_id_to_sdk(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_teams_client_debug_logs_raw_channel_fields_without_secrets(monkeypatch, caplog):
+    class TeamsInfoDouble:
+        @staticmethod
+        async def get_team_channels(turn_context, team_id):
+            return [{"id": "buyer-id", "name": "buyer", "token": "secret"}]
+
+    monkeypatch.setattr(teams_client, "TeamsInfo", TeamsInfoDouble)
+
+    with caplog.at_level("DEBUG", logger="src.clients.teams_client"):
+        await TeamsClient().get_team_channels(object(), "trusted-team-id")
+
+    record = next(
+        record for record in caplog.records
+        if record.message == "teams_info_team_channels_returned"
+    )
+    assert record.raw_channel_fields == [{
+        "id": "buyer-id", "name": "buyer", "token": "[REDACTED]"
+    }]
+
+
+@pytest.mark.asyncio
 async def test_installation_discovery_uses_authenticated_team_context():
     class InstallationRepository:
         def __init__(self):
@@ -67,7 +88,7 @@ async def test_installation_discovery_uses_authenticated_team_context():
 
 
 @pytest.mark.asyncio
-async def test_single_team_id_result_is_persisted_as_general_with_installation(caplog):
+async def test_single_team_id_result_without_name_is_not_fabricated_as_general(caplog):
     class InstallationRepository:
         def __init__(self):
             self.saved = []
@@ -104,7 +125,7 @@ async def test_single_team_id_result_is_persisted_as_general_with_installation(c
     assert len(installation_repository.saved) == 1
     assert len(channel_repository.saved) == 1
     assert channel_repository.saved[0].channel_id == "team-id"
-    assert channel_repository.saved[0].channel_name == "General"
+    assert channel_repository.saved[0].channel_name is None
     assert "teams_channel_discovery_ambiguous_general_skipped" not in caplog.messages
 
 
@@ -178,6 +199,10 @@ async def test_real_message_registers_selected_channel_and_is_idempotent():
             self.documents[identity].update(update["$set"])
             self.documents[identity].update(update.get("$setOnInsert", {}))
 
+        async def find_one(self, query):
+            identity = tuple(query[field] for field in ("tenant_id", "team_id", "channel_id"))
+            return self.documents.get(identity)
+
     collection = Collection()
     repository = DiscoveredChannelRepository(collection=collection)
     service = TeamsService(object(), repository)
@@ -192,7 +217,7 @@ async def test_real_message_registers_selected_channel_and_is_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_genuine_general_activity_uses_general_fallback():
+async def test_genuine_general_activity_preserves_explicit_general_name():
     class Repository:
         def __init__(self):
             self.saved = []
@@ -204,10 +229,101 @@ async def test_genuine_general_activity_uses_general_fallback():
     service = TeamsService(object(), repository)
 
     await service.register_channel_from_activity(
-        _channel_activity("team-id", activity_type="message")
+        _channel_activity("team-id", "General", activity_type="message")
     )
 
     assert repository.saved[0].channel_name == "General"
+
+
+@pytest.mark.asyncio
+async def test_channel_without_name_does_not_become_general_when_ids_match():
+    class Repository:
+        def __init__(self):
+            self.saved = []
+
+        async def upsert(self, channel):
+            self.saved.append(channel)
+
+    class Client:
+        async def get_team_channels(self, turn_context, team_id):
+            return [SimpleNamespace(id=team_id)]
+
+    repository = Repository()
+    service = TeamsService(Client(), repository)
+
+    await service.discover_channels(
+        SimpleNamespace(), TeamsContext(tenant_id="tenant", team_id="team")
+    )
+
+    assert repository.saved[0].channel_name is None
+
+
+@pytest.mark.asyncio
+async def test_provider_names_buyer_and_seller_are_preserved():
+    class Client:
+        async def get_team_channels(self, turn_context, team_id):
+            return [
+                SimpleNamespace(id="team", name="buyer"),
+                SimpleNamespace(id="seller-id", name="seller"),
+            ]
+
+    class Repository:
+        def __init__(self):
+            self.saved = []
+
+        async def upsert(self, channel):
+            self.saved.append(channel)
+
+    repository = Repository()
+    service = TeamsService(Client(), repository)
+
+    discovered = await service.discover_channels(
+        SimpleNamespace(), TeamsContext(tenant_id="tenant", team_id="team")
+    )
+
+    assert [(channel.channel_id, channel.channel_name) for channel in discovered] == [
+        ("team", "buyer"),
+        ("seller-id", "seller"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_existing_persisted_buyer_is_not_overwritten_by_missing_provider_name():
+    class Collection:
+        def __init__(self):
+            self.documents = {}
+
+        async def update_one(self, query, update, upsert=False):
+            identity = tuple(query[field] for field in ("tenant_id", "team_id", "channel_id"))
+            if identity not in self.documents and upsert:
+                self.documents[identity] = {}
+            self.documents[identity].update(update["$set"])
+            self.documents[identity].update(update.get("$setOnInsert", {}))
+
+        async def find_one(self, query):
+            identity = tuple(query[field] for field in ("tenant_id", "team_id", "channel_id"))
+            return self.documents.get(identity)
+
+    collection = Collection()
+    repository = DiscoveredChannelRepository(collection=collection)
+    await repository.upsert({
+        "tenant_id": "tenant",
+        "team_id": "team",
+        "channel_id": "team",
+        "channel_name": "buyer",
+    })
+
+    class Client:
+        async def get_team_channels(self, turn_context, team_id):
+            return [SimpleNamespace(id=team_id)]
+
+    service = TeamsService(Client(), repository)
+    discovered = await service.discover_channels(
+        SimpleNamespace(), TeamsContext(tenant_id="tenant", team_id="team")
+    )
+
+    assert discovered[0].channel_name == "buyer"
+    assert (await repository.get("tenant", "team", "team"))["channel_name"] == "buyer"
 
 
 @pytest.mark.asyncio

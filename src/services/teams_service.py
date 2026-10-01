@@ -24,13 +24,37 @@ def _value(item: Any, *names: str) -> Any:
     return None
 
 
-def _resolve_channel_name(channel: Any, channel_id: str, team_id: str) -> str | None:
-    """Resolve SDK channel name variants and the Teams General-channel fallback."""
-    value = _value(channel, "name", "display_name", "displayName")
-    channel_name = value.strip() if isinstance(value, str) else None
-    if not channel_name and channel_id == team_id:
-        return "General"
-    return channel_name or None
+def _clean_channel_name(value: Any) -> str | None:
+    """Return a non-empty channel name without inventing one."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _resolve_channel_name(
+    channel: Any,
+    channel_id: str,
+    team_id: str,
+    persisted_name: Any = None,
+    *trusted_names: Any,
+) -> str | None:
+    """Resolve a channel name from trusted values, never from IDs alone.
+
+    ``channel_id`` and ``team_id`` remain part of the call contract for the
+    logical channel identity, but their equality is not evidence of a display
+    name.  The values are deliberately not used for name resolution.
+    """
+    del channel_id, team_id
+    provider_names = tuple(
+        _clean_channel_name(_value(channel, field))
+        for field in ("name", "display_name", "displayName", "channel_name", "channelName")
+    )
+    for candidate in (*provider_names, persisted_name, *trusted_names):
+        channel_name = _clean_channel_name(candidate)
+        if channel_name:
+            return channel_name
+    return None
 
 
 class TeamsService:
@@ -51,6 +75,16 @@ class TeamsService:
         installation = await self.installation_repository.get(context.tenant_id, context.team_id)
         team_name = installation.get("team_name") if installation else None
         return team_name if isinstance(team_name, str) and team_name.strip() else None
+
+    async def _existing_channel_name(
+        self, tenant_id: str, team_id: str, channel_id: str
+    ) -> str | None:
+        """Read an existing name so a sparse provider response cannot erase it."""
+        get_channel = getattr(self.channel_repository, "get", None)
+        if get_channel is None:
+            return None
+        existing = await get_channel(tenant_id, team_id, channel_id)
+        return _clean_channel_name(_value(existing, "channel_name"))
 
     async def discover_channels(self, turn_context: Any, context: TeamsContext) -> list[DiscoveredChannel]:
         """Discover every channel and upsert by tenant/team/channel identity."""
@@ -79,7 +113,12 @@ class TeamsService:
             channel_id = _value(channel, "id")
             if not channel_id:
                 continue
-            channel_name = _resolve_channel_name(channel, channel_id, context.team_id)
+            persisted_name = await self._existing_channel_name(
+                context.tenant_id, context.team_id, channel_id
+            )
+            channel_name = _resolve_channel_name(
+                channel, channel_id, context.team_id, persisted_name
+            )
             logger.info(
                 "teams_channel_discovered",
                 extra={
@@ -129,8 +168,14 @@ class TeamsService:
             return None
 
         team_name = await self._resolve_team_name(context)
+        persisted_name = await self._existing_channel_name(
+            context.tenant_id, context.team_id, context.channel_id
+        )
         channel_name = _resolve_channel_name(
-            {"name": context.channel_name}, context.channel_id, context.team_id
+            {"name": context.channel_name},
+            context.channel_id,
+            context.team_id,
+            persisted_name,
         )
         channel = DiscoveredChannel(
             tenant_id=context.tenant_id,
@@ -218,8 +263,15 @@ class TeamsService:
         channel_data = _as_mapping(
             _as_mapping(activity_data.get("channelData") or activity_data.get("channel_data")).get("channel")
         )
+        persisted_name = await self._existing_channel_name(
+            context.tenant_id, context.team_id, context.channel_id
+        )
         channel_name = _resolve_channel_name(
-            channel_data, context.channel_id, context.team_id
+            channel_data,
+            context.channel_id,
+            context.team_id,
+            persisted_name,
+            context.channel_name,
         )
         channel = DiscoveredChannel(
             tenant_id=context.tenant_id,

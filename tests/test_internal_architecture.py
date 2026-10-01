@@ -174,11 +174,11 @@ async def test_channel_discovery_persists_all_channels():
         (SimpleNamespace(id="channel", name="Normal"), "Normal"),
         (SimpleNamespace(id="channel", display_name="Display name"), "Display name"),
         ({"id": "channel", "displayName": "DisplayName"}, "DisplayName"),
-        (SimpleNamespace(id="team"), "General"),
+        (SimpleNamespace(id="team"), None),
         (SimpleNamespace(id="other-channel"), None),
     ],
 )
-async def test_channel_discovery_resolves_name_variants_and_general_fallback(channel, expected):
+async def test_channel_discovery_resolves_name_variants_without_id_name_fallback(channel, expected):
     class Client:
         async def get_team_channels(self, turn_context, team_id):
             return [channel, SimpleNamespace(id="other-channel", name="Other")]
@@ -214,7 +214,8 @@ async def test_default_channel_discovery_persists_general_idempotently():
     second = await service.discover_channels(SimpleNamespace(), context)
 
     assert first[0].channel_id == second[0].channel_id == "team"
-    assert first[0].channel_name == second[0].channel_name == "General"
+    assert first[0].channel_name is None
+    assert second[0].channel_name is None
     assert await repository.get("tenant", "team", "team") is not None
     assert len(collection.documents) == 1
 
