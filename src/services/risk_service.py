@@ -15,6 +15,14 @@ class RiskService:
     def __init__(self, repository: RiskRepository) -> None:
         self.repository = repository
 
+    async def list(self) -> list[dict[str, Any]]:
+        """Normalize and return active risk documents."""
+        documents = await self.repository.list_active()
+        return [
+            RiskDocument.model_validate(document).as_mapping()
+            for document in documents
+        ]
+
     async def get(self, risk_id: str) -> dict[str, Any]:
         """Normalize, validate, and return one active risk document."""
         normalized_risk_id = risk_id.strip() if isinstance(risk_id, str) else ""

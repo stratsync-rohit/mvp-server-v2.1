@@ -18,6 +18,7 @@ from src.schemas.destination import Destination
 from src.schemas.destination import build_destination_id
 from src.schemas.teams import TeamInstallation, TeamsContext
 from src.services.destination_service import DestinationService
+from src.services.installation_service import InstallationService
 from src.services.notification_service import NotificationService
 from src.services.reaction_service import ReactionService
 from src.services.teams_service import TeamsService
@@ -232,6 +233,89 @@ async def test_conversation_update_delegates_to_teams_service():
     await RiskBot(teams_service=service).on_conversation_update_activity(context)
 
     assert service.activities == [context]
+
+
+@pytest.mark.asyncio
+async def test_team_deleted_marks_authenticated_installation_inactive(caplog):
+    class InstallationRepository:
+        def __init__(self):
+            self.calls = []
+
+        async def mark_inactive(self, tenant_id, team_id):
+            self.calls.append((tenant_id, team_id))
+
+    class ChannelRepository:
+        async def upsert(self, channel):
+            raise AssertionError("teamDeleted must not persist a channel")
+
+    activity = SimpleNamespace(activity={
+        "type": "conversationUpdate",
+        "channelData": {
+            "eventType": "teamDeleted",
+            "tenant": {"id": "tenant-authenticated"},
+            "team": {"id": "team-deleted", "name": "Deleted Team"},
+        },
+    })
+    installation_repository = InstallationRepository()
+    service = TeamsService(object(), ChannelRepository(), installation_repository)
+
+    with caplog.at_level("INFO"):
+        assert await service.handle_conversation_update(activity) is None
+
+    assert installation_repository.calls == [("tenant-authenticated", "team-deleted")]
+    record = next(record for record in caplog.records if record.message == "teams_team_deleted")
+    assert (record.tenant_id, record.team_id, record.team_name) == (
+        "tenant-authenticated", "team-deleted", "Deleted Team"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "channel_data",
+    [
+        {"eventType": "teamDeleted", "team": {"id": "team-only"}},
+        {"eventType": "teamDeleted", "tenant": {"id": "tenant-only"}},
+    ],
+)
+async def test_team_deleted_skips_missing_identity(channel_data):
+    class InstallationRepository:
+        def __init__(self):
+            self.calls = []
+
+        async def mark_inactive(self, tenant_id, team_id):
+            self.calls.append((tenant_id, team_id))
+
+    activity = SimpleNamespace(activity={
+        "type": "conversationUpdate", "channelData": channel_data,
+    })
+    installation_repository = InstallationRepository()
+    service = TeamsService(object(), object(), installation_repository)
+
+    assert await service.handle_conversation_update(activity) is None
+    assert installation_repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_installation_remove_marks_team_inactive():
+    class InstallationRepository:
+        def __init__(self):
+            self.calls = []
+
+        async def mark_inactive(self, tenant_id, team_id):
+            self.calls.append((tenant_id, team_id))
+
+    installation_repository = InstallationRepository()
+    service = InstallationService(installation_repository, object())
+    activity = SimpleNamespace(activity={
+        "type": "installationUpdate",
+        "channelData": {
+            "tenant": {"id": "tenant"}, "team": {"id": "team"},
+        },
+    })
+
+    await service.remove(activity)
+
+    assert installation_repository.calls == [("tenant", "team")]
 
 
 @pytest.mark.asyncio

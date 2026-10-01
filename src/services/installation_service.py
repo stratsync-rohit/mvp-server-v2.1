@@ -22,7 +22,7 @@ class InstallationService:
 
     async def list_installations(self) -> list[InstallationResponse]:
         """Aggregate safe installation DTOs with tenant/team-matched channels."""
-        installations = await self.repository.list_all()
+        installations = await self.repository.list_active()
         results: list[InstallationResponse] = []
         for installation in installations:
             tenant_id = installation.get("tenant_id")

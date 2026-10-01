@@ -46,3 +46,13 @@ class TeamInstallationRepository(MongoRepository):
             return [document async for document in cursor]
         result = await maybe_await(cursor)
         return list(result or [])
+
+    async def list_active(self) -> list[dict[str, Any]]:
+        """Fetch only currently active installations for public aggregation."""
+        cursor = self.collection.find({"is_active": True})
+        if hasattr(cursor, "to_list"):
+            return await cursor.to_list(length=None)
+        if hasattr(cursor, "__aiter__"):
+            return [document async for document in cursor]
+        result = await maybe_await(cursor)
+        return list(result or [])

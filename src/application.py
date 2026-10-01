@@ -14,6 +14,7 @@ from src.api.health_routes import router as health_router
 from src.api.installation_routes import router as installation_router
 from src.api.destination_routes import router as destination_router
 from src.api.notification_routes import router as notification_router
+from src.api.risk_routes import router as risk_router
 from src.bot.adapter import create_adapter
 from src.bot.handlers.risk_bot import RiskBot
 from src.config.settings import get_settings
@@ -152,4 +153,5 @@ def create_app() -> FastAPI:
     app.include_router(installation_router)
     app.include_router(destination_router)
     app.include_router(notification_router)
+    app.include_router(risk_router)
     return app

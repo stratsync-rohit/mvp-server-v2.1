@@ -155,7 +155,7 @@ class TeamsService:
         return channel
 
     async def handle_conversation_update(self, turn_context: Any) -> DiscoveredChannel | None:
-        """Persist a channel created event from an authenticated Teams activity."""
+        """Handle channel-created and team-deleted Teams lifecycle events."""
         activity = turn_context.activity
         activity_data = _as_mapping(activity)
         activity_type = activity_data.get("type") or getattr(activity, "type", None)
@@ -163,10 +163,38 @@ class TeamsService:
             activity_data.get("channelData") or activity_data.get("channel_data")
         )
         event_type = channel_data.get("eventType") or channel_data.get("event_type")
-        if activity_type != "conversationUpdate" or event_type != "channelCreated":
+        if activity_type != "conversationUpdate":
             return None
 
         context = TeamsContext.from_activity(activity)
+        if event_type == "teamDeleted":
+            if not context.tenant_id or not context.team_id:
+                logger.info(
+                    "teams_team_deleted_skipped",
+                    extra={
+                        "tenant_id": context.tenant_id,
+                        "team_id": context.team_id,
+                        "team_name": context.team_name,
+                    },
+                )
+                return None
+            logger.info(
+                "teams_team_deleted",
+                extra={
+                    "tenant_id": context.tenant_id,
+                    "team_id": context.team_id,
+                    "team_name": context.team_name,
+                },
+            )
+            if self.installation_repository is not None:
+                await self.installation_repository.mark_inactive(
+                    context.tenant_id, context.team_id
+                )
+            return None
+
+        if event_type != "channelCreated":
+            return None
+
         if not context.tenant_id or not context.team_id or not context.channel_id:
             logger.info(
                 "teams_channel_created_skipped",

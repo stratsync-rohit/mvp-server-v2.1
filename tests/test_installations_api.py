@@ -49,7 +49,7 @@ def _channel(tenant_id: str, team_id: str, channel_id: str) -> dict:
 
 def _aggregated_service() -> InstallationService:
     class InstallationRepository:
-        async def list_all(self):
+        async def list_active(self):
             return [_installation("tenant-a", "team-1"), _installation("tenant-b", "team-1")]
 
     class ChannelRepository:
@@ -75,7 +75,7 @@ def test_installations_service_without_channel_repository_still_returns_installa
     import asyncio
 
     class InstallationRepository:
-        async def list_all(self):
+        async def list_active(self):
             return [_installation("tenant-a", "team-1")]
 
     data = asyncio.run(
@@ -85,6 +85,27 @@ def test_installations_service_without_channel_repository_still_returns_installa
     assert len(data) == 1
     assert data[0].team_name == "Team team-1"
     assert data[0].channels == []
+
+
+def test_installations_service_uses_active_installations_only():
+    import asyncio
+
+    active = _installation("tenant-a", "active-team")
+    inactive = _installation("tenant-a", "deleted-team")
+    inactive["is_active"] = False
+
+    class InstallationRepository:
+        async def list_active(self):
+            return [active]
+
+        async def list_all(self):
+            return [active, inactive]
+
+    data = asyncio.run(
+        InstallationService(InstallationRepository(), object()).list_installations()
+    )
+
+    assert [item.team_id for item in data] == ["active-team"]
 
 
 def test_get_installations_returns_safe_enveloped_data():
